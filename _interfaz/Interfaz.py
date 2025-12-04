@@ -7,15 +7,18 @@ import serial.tools.list_ports
 
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit,
+    QApplication, QMainWindow, QWidget, QLabel,
     QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox,
-    QDoubleSpinBox, QComboBox
+    QDoubleSpinBox
 )
 import pyqtgraph as pg
 
 
 def listar_puertos():
-    return [p.device for p in serial.tools.list_ports.comports()]
+    ports = [p.device for p in serial.tools.list_ports.comports()]
+    if not ports and sys.platform.startswith('win'):
+        return ["COM8"]
+    return ports
 
 
 class MainWindow(QMainWindow):
@@ -25,6 +28,7 @@ class MainWindow(QMainWindow):
         self.ser = None
         self.serial_buffer = ""
         self.t0 = None
+        self.FIXED_BAUDRATE = 115200
 
         self.max_points = 600
         self.time_data = deque(maxlen=self.max_points)
@@ -35,60 +39,95 @@ class MainWindow(QMainWindow):
         self._build_ui()
 
         self.timer = QTimer(self)
-        self.timer.setInterval(20)  # ms
+        self.timer.setInterval(20)
         self.timer.timeout.connect(self.update_from_serial)
         self.timer.start()
 
-
     def _build_ui(self):
-        self.setWindowTitle("PID")
+        self.setWindowTitle("Levitador")
         self.resize(1050, 650)
 
-        self.setStyleSheet("""
-        QWidget {
-            background-color: #F0F8FF; /* Alice Blue - Fondo muy claro */
-            color: #000000; /* Texto negro por defecto para alto contraste */
-            font-family: 'Segoe UI';
-        }
-        QGroupBox {
-            border: 2px solid #A0B9D5; /* Borde azul suave */
+        # Definimos el estilo de la fuente de datos
+        self.data_font_style = "font-family: 'Consolas', 'Courier New', monospace; font-size: 10pt; font-weight: 500;"
+
+        # --- PALETA DE COLORES PASTEL/NARANJA ---
+        COLOR_BACKGROUND = "#FFF0E6"  # Blanco/Crema muy suave
+        COLOR_GROUP_TITLE = "#E67E22"  # Naranja Suave
+        COLOR_LABEL_DEFAULT = "#E74C3C"  # Rojo Pastel
+        COLOR_BUTTON_NORMAL = "#F39C12"  # Naranja
+        COLOR_BUTTON_HOVER = "#F7C469"  # Naranja Pastel
+        COLOR_TEXT_NORMAL = "#000000"
+
+        # Colores de las gráficas
+        COLOR_POSICION = "#C0392B"  # Rojo Ladrillo/Oscuro
+        COLOR_REFERENCIA = "#F39C12"  # Naranja
+
+        # Colores de estado
+        COLOR_SUCCESS = "#2ECC71"  # Verde (para conexión OK)
+        COLOR_ERROR = "#E74C3C"  # Rojo Pastel
+        COLOR_WARNING = "#F39C12"  # Naranja
+        COLOR_INFO = "#3498DB"  # Azul (para envío de SP/PID)
+        COLOR_DESCONECTADO = "#778899"  # Gris
+
+        self.setStyleSheet(f"""
+        QWidget {{
+            background-color: {COLOR_BACKGROUND}; 
+            color: {COLOR_TEXT_NORMAL};
+            font-family: 'Verdana', 'Calibri', 'Helvetica', sans-serif; 
+        }}
+
+        /* Estilo de Grupo: Sombra suave y sin borde duro (Estilo Soft UI) */
+        QGroupBox {{
+            border: none;
             border-radius: 12px;
             margin-top: 20px;
-            background-color: #FFFFFF; /* Fondo de grupo blanco */
-        }
-        QGroupBox::title {
+            background-color: #FFFFFF;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); 
+        }}
+        QGroupBox::title {{
             subcontrol-origin: margin;
             subcontrol-position: top left;
             padding: 0 10px;
-            color: #4682B4; /* Azul acero - Título de grupo */
+            color: {COLOR_GROUP_TITLE};
             font-size: 13pt;
             font-weight: bold;
-        }
-        QLabel {
+        }}
+
+        QLabel {{
             font-size: 11pt;
-            color: #1E90FF; /* Azul oscuro para texto general */
-        }
-        QPushButton {
-            background-color: #6495ED; /* Cornflower Blue - Botón principal */
-            color: #FFFFFF; /* Texto blanco en botón */
+            color: {COLOR_LABEL_DEFAULT};
+        }}
+
+        /* Estilo de Botón: Estilo plano (flat) */
+        QPushButton {{
+            background-color: {COLOR_BUTTON_NORMAL};
+            color: #FFFFFF;
+            border: none;
             border-radius: 8px;
             padding: 8px 16px;
             font-weight: bold;
-        }
-        QPushButton:hover {
-            background-color: #778899; /* Light Slate Gray en hover */
-        }
-        QPushButton:disabled {
+        }}
+        QPushButton:hover {{
+            background-color: {COLOR_BUTTON_HOVER}; 
+        }}
+        QPushButton:disabled {{
             background-color: #A0B9D5;
-        }
-        QLineEdit, QDoubleSpinBox, QComboBox {
-            background-color: #E0FFFF; /* Azure - Campos de entrada */
-            border: 1px solid #4682B4;
+        }}
+
+        /* Estilo de Inputs: Borde sutil y foco */
+        QLineEdit, QDoubleSpinBox {{
+            font-family: 'Consolas', 'Courier New', monospace; 
+            background-color: {COLOR_BACKGROUND};
+            border: 1px solid #E0E0E0;
             border-radius: 6px;
             padding: 4px 6px;
             font-size: 10pt;
-            color: #000000;
-        }
+            color: {COLOR_TEXT_NORMAL};
+        }}
+        QLineEdit:focus, QDoubleSpinBox:focus {{
+            border: 1px solid {COLOR_LABEL_DEFAULT};
+            background-color: #FFFFFF;
+        }}
         """)
 
         central = QWidget()
@@ -96,53 +135,72 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(16, 12, 16, 12)
         main_layout.setSpacing(12)
 
+        # 1. TÍTULO CENTRADO
         header_layout = QHBoxLayout()
+        header_layout.addStretch(1)
         lbl_title = QLabel("Levitador")
-        lbl_title.setStyleSheet("font-size: 26pt; font-weight: 700; color: #4682B4;")
-
-        lbl_credits = QLabel("Materia - Sistemas de Control")
-        lbl_credits.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        lbl_credits.setStyleSheet("font-size: 11pt; color: #6A5ACD;")
-
-        header_layout.addWidget(lbl_title, 1)
-        header_layout.addWidget(lbl_credits, 0)
+        lbl_title.setStyleSheet(f"font-size: 26pt; font-weight: 700; color: {COLOR_GROUP_TITLE};")
+        lbl_title.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(lbl_title, 0)
+        header_layout.addStretch(1)
         main_layout.addLayout(header_layout)
 
-        center_layout = QHBoxLayout()
-        center_layout.setSpacing(20)
+        # 2. GRÁFICA SUPERIOR (stretch 6)
+        grp_plot = QGroupBox("Grafica de Respuesta")
+        plot_layout = QVBoxLayout()
+        pg.setConfigOption("background", "#FFFFFF")
+        pg.setConfigOption("foreground", COLOR_TEXT_NORMAL)
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setLabel("bottom", "Tiempo", units="s")
+        self.plot_widget.setLabel("left", "Posición", units="cm")
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
 
+        # Título con los nuevos colores y círculos
+        self.plot_widget.setTitle(
+            f"""
+            <span style='color:{COLOR_GROUP_TITLE}; font-size:14pt;'>
+                <span style='color:{COLOR_POSICION}; font-size: 20pt;'>●</span> Posición Actual &nbsp; - &nbsp; 
+                <span style='color:{COLOR_REFERENCIA}; font-size: 20pt;'>●</span> Referencia
+            </span>
+            """
+        )
+
+        # CURVAS (Nuevos colores)
+        self.curve_pos = self.plot_widget.plot([], [],
+                                               pen=pg.mkPen(color=COLOR_POSICION, width=2, name="Posición"))
+        self.curve_ref = self.plot_widget.plot([], [], pen=pg.mkPen(color=COLOR_REFERENCIA, style=Qt.DashLine, width=2,
+                                                                    name="Referencia"))
+        self.ref_data = deque(maxlen=self.max_points)
+
+        self.plot_widget.addLegend()
+
+        plot_layout.addWidget(self.plot_widget)
+        grp_plot.setLayout(plot_layout)
+        main_layout.addWidget(grp_plot, 6)
+
+        # 3. INFORMACIÓN INFERIOR (stretch 1)
+        bottom_layout = QHBoxLayout()
+        bottom_layout.setSpacing(20)
+
+        # Panel Izquierdo (Configuración y PID)
         left_panel = QVBoxLayout()
         left_panel.setSpacing(15)
 
-
-        grp_config = QGroupBox("Configuración y Referencia")
+        grp_config = QGroupBox()
         config_layout = QVBoxLayout()
         config_layout.setSpacing(15)
 
-
-        conn_grid = QGridLayout()
-        conn_grid.setColumnStretch(1, 1)
-
-        lbl_port = QLabel("Puerto:")
-        self.cmb_port = QComboBox()
-        self.refresh_ports()
-
-        btn_refresh = QPushButton("Actualizar")
-        btn_refresh.clicked.connect(self.refresh_ports)
-
-        lbl_baud = QLabel("Baudrate:")
-        self.txt_baud = QLineEdit("115200")
-
+        # Conexión
+        conn_layout = QVBoxLayout()
+        self.auto_port = "COM8"
         self.btn_connect = QPushButton("Conectar")
         self.btn_connect.clicked.connect(self.toggle_connection)
-        self.lbl_status = QLabel("Estado: Desconectado")
-        self.lbl_status.setStyleSheet("color: #FF6347; font-size: 10pt; font-weight: 500;")
 
-        conn_grid.addWidget(lbl_port, 0, 0)
-        conn_grid.addWidget(self.cmb_port, 0, 1)
-        conn_grid.addWidget(btn_refresh, 0, 2)
-        conn_grid.addWidget(lbl_baud, 1, 0)
-        conn_grid.addWidget(self.txt_baud, 1, 1)
+        self.lbl_status = QLabel("DESCONECTADO.")
+        self.lbl_status.setStyleSheet(f"color: {COLOR_ERROR}; {self.data_font_style}")
+
+        conn_layout.addWidget(self.btn_connect)
+        conn_layout.addWidget(self.lbl_status)
 
         setpoint_h = QHBoxLayout()
         lbl_setpoint = QLabel("Setpoint [cm]:")
@@ -158,43 +216,13 @@ class MainWindow(QMainWindow):
         setpoint_h.addWidget(self.spn_setpoint)
         setpoint_h.addWidget(self.btn_send_setpoint)
 
-        config_layout.addLayout(conn_grid)
-        config_layout.addWidget(self.btn_connect)
-        config_layout.addWidget(self.lbl_status)
+        config_layout.addLayout(conn_layout)
         config_layout.addStretch(1)
         config_layout.addLayout(setpoint_h)
         grp_config.setLayout(config_layout)
         left_panel.addWidget(grp_config)
 
-
-        grp_state = QGroupBox("Variables de Proceso")
-        state_layout = QVBoxLayout()
-
-        lbl_ref_style = "font-size: 13pt; color: #4682B4; font-weight: 600;"
-        lbl_pos_style = "font-size: 16pt; font-weight: 700; color: #1E90FF;"
-        lbl_error_style = "font-size: 14pt; font-weight: 600; color: #3CB371;"
-
-        self.lbl_ref = QLabel("Referencia (Set): 0.00 cm")
-        self.lbl_ref.setStyleSheet(lbl_ref_style)
-
-        self.lbl_pos = QLabel("Posición (PV): --- cm")
-        self.lbl_pos.setStyleSheet(lbl_pos_style)
-
-        self.lbl_error = QLabel("Error (E): ---")
-        self.lbl_error.setStyleSheet(lbl_error_style)
-
-        self.lbl_in_range = QLabel("Estado: ---")
-        self.lbl_in_range.setStyleSheet("font-size: 11pt; color: #778899;")
-
-        state_layout.addWidget(self.lbl_ref)
-        state_layout.addWidget(self.lbl_pos)
-        state_layout.addWidget(self.lbl_error)
-        state_layout.addWidget(self.lbl_in_range)
-        grp_state.setLayout(state_layout)
-        left_panel.addWidget(grp_state)
-
-
-        grp_pid = QGroupBox("Ganancias Kp, Ki, Kd")
+        grp_pid = QGroupBox("PID")
         pid_layout = QGridLayout()
 
         lbl_kp = QLabel("Kp (Proporcional):")
@@ -205,19 +233,19 @@ class MainWindow(QMainWindow):
         self.spn_kp.setDecimals(3)
         self.spn_kp.setRange(0.0, 1000.0)
         self.spn_kp.setSingleStep(0.1)
-        self.spn_kp.setValue(1.0)
+        self.spn_kp.setValue(13.0)
 
         self.spn_ki = QDoubleSpinBox()
         self.spn_ki.setDecimals(4)
         self.spn_ki.setRange(0.0, 1000.0)
         self.spn_ki.setSingleStep(0.01)
-        self.spn_ki.setValue(10.0)
+        self.spn_ki.setValue(0.11)
 
         self.spn_kd = QDoubleSpinBox()
         self.spn_kd.setDecimals(3)
         self.spn_kd.setRange(0.0, 1000.0)
         self.spn_kd.setSingleStep(1.0)
-        self.spn_kd.setValue(9.0)
+        self.spn_kd.setValue(37.0)
 
         self.btn_send_pid = QPushButton("Enviar Constantes K")
         self.btn_send_pid.clicked.connect(self.send_pid)
@@ -234,47 +262,46 @@ class MainWindow(QMainWindow):
 
         left_panel.addStretch(1)
 
+        # Panel Derecho (Variables de Proceso)
         right_panel = QVBoxLayout()
-        grp_plot = QGroupBox("Respuesta en tiempo real (Posición vs. Referencia)")
-        plot_layout = QVBoxLayout()
-        pg.setConfigOption("background", "#FFFFFF")
-        pg.setConfigOption("foreground", "#000000")
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setLabel("bottom", "Tiempo", units="s")
-        self.plot_widget.setLabel("left", "Posición", units="cm")
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setTitle(
-            "<span style='color:#4682B4; font-size:14pt;'>Posición (Azul) y Referencia (Rojo)</span>")
+        grp_state = QGroupBox()
+        state_layout = QVBoxLayout()
 
-        # CURVAS
-        self.curve_pos = self.plot_widget.plot([], [],
-                                               pen=pg.mkPen(color='#1E90FF', width=2, name="Posición"))
-        self.curve_ref = self.plot_widget.plot([], [], pen=pg.mkPen(color='#FF6347', style=Qt.DashLine, width=2,
-                                                                    name="Referencia"))
-        self.ref_data = deque(maxlen=self.max_points)
+        # Se usa el estilo de fuente de datos (monoespaciada)
+        data_font_family = "font-family: 'Consolas', 'Courier New', monospace;"
 
-        self.plot_widget.addLegend()
+        lbl_ref_style = f"{data_font_family} font-size: 13pt; color: {COLOR_GROUP_TITLE}; font-weight: 600;"
+        lbl_pos_style = f"{data_font_family} font-size: 16pt; font-weight: 700; color: {COLOR_POSICION};"
+        lbl_error_style = f"{data_font_family} font-size: 14pt; font-weight: 600; color: {COLOR_SUCCESS};"  # Color inicial
 
-        plot_layout.addWidget(self.plot_widget)
-        grp_plot.setLayout(plot_layout)
-        right_panel.addWidget(grp_plot)
-        center_layout.addLayout(left_panel, 1)
-        center_layout.addLayout(right_panel, 2)
+        self.lbl_ref = QLabel("Referencia (Set): 0.00 cm")
+        self.lbl_ref.setStyleSheet(lbl_ref_style)
 
-        main_layout.addLayout(center_layout)
+        self.lbl_pos = QLabel("Posición (PV): --- cm")
+        self.lbl_pos.setStyleSheet(lbl_pos_style)
+
+        self.lbl_error = QLabel("Error (E): ---")
+        self.lbl_error.setStyleSheet(lbl_error_style)
+
+        state_layout.addWidget(self.lbl_ref)
+        state_layout.addWidget(self.lbl_pos)
+        state_layout.addWidget(self.lbl_error)
+
+        grp_state.setLayout(state_layout)
+        right_panel.addWidget(grp_state)
+        right_panel.addStretch(1)
+
+        bottom_layout.addLayout(left_panel, 1)
+        bottom_layout.addLayout(right_panel, 1)
+
+        main_layout.addLayout(bottom_layout, 1)
+
         self.setCentralWidget(central)
 
+    # --- Lógica de Conexión y PID ---
 
     def refresh_ports(self):
-        current = self.cmb_port.currentText() if hasattr(self, "cmb_port") else ""
-        self.cmb_port.clear()
-        ports = listar_puertos()
-        if not ports:
-            self.cmb_port.addItem("Sin puertos")
-        else:
-            self.cmb_port.addItems(ports)
-            if current in ports:
-                self.cmb_port.setCurrentText(current)
+        pass
 
     def toggle_connection(self):
         if self.ser and self.ser.is_open:
@@ -283,27 +310,25 @@ class MainWindow(QMainWindow):
             self.open_serial()
 
     def open_serial(self):
-        port = self.cmb_port.currentText()
-        if not port or port == "Sin puertos":
-            self.lbl_status.setText("Estado: No hay puerto seleccionado")
-            return
-        try:
-            baud = int(self.txt_baud.text())
-        except ValueError:
-            self.lbl_status.setText("Estado: Baudrate inválido")
-            return
+        port = self.auto_port
+        baud = self.FIXED_BAUDRATE
+        COLOR_SUCCESS = "#2ECC71"
+        COLOR_ERROR = "#E74C3C"
 
         try:
             self.ser = serial.Serial(port, baudrate=baud, timeout=0.01)
             self.serial_buffer = ""
             self.t0 = time.time()
             self.btn_connect.setText("Desconectar")
-            self.lbl_status.setText(f"Estado: Conectado a {port} @ {baud}")
-        except Exception as e:
+            self.lbl_status.setText(f"CONECTADO a {port}.")
+            self.lbl_status.setStyleSheet(f"color: {COLOR_SUCCESS}; {self.data_font_style}")  # Verde Pastel
+        except Exception:
             self.ser = None
-            self.lbl_status.setText(f"Estado: Error al conectar ({e})")
+            self.lbl_status.setText(f"ERROR: No se pudo conectar a {port}.")
+            self.lbl_status.setStyleSheet(f"color: {COLOR_ERROR}; {self.data_font_style}")  # Rojo Pastel
 
     def close_serial(self):
+        COLOR_DESCONECTADO = "#778899"
         try:
             if self.ser and self.ser.is_open:
                 self.ser.close()
@@ -311,11 +336,17 @@ class MainWindow(QMainWindow):
             pass
         self.ser = None
         self.btn_connect.setText("Conectar")
-        self.lbl_status.setText("Estado: Desconectado")
+        self.lbl_status.setText("DESCONECTADO.")
+        self.lbl_status.setStyleSheet(f"color: {COLOR_DESCONECTADO}; {self.data_font_style}")  # Gris
 
     def send_setpoint(self):
+        COLOR_WARNING = "#F39C12"
+        COLOR_INFO = "#3498DB"
+        COLOR_ERROR = "#E74C3C"
+
         if not (self.ser and self.ser.is_open):
-            self.lbl_status.setText("Estado: No conectado (no se envió Setpoint)")
+            self.lbl_status.setText("DESCONECTADO. SP no enviado.")
+            self.lbl_status.setStyleSheet(f"color: {COLOR_WARNING}; {self.data_font_style}")  # Naranja para advertencia
             return
 
         setpoint = self.spn_setpoint.value()
@@ -325,14 +356,21 @@ class MainWindow(QMainWindow):
 
         try:
             self.ser.write(msg.encode("ascii"))
-            self.lbl_status.setText(f"Estado: Setpoint enviado = {setpoint:.1f} cm")
+            self.lbl_status.setText(f"SP enviado = {setpoint:.1f} cm")
             self.lbl_ref.setText(f"Referencia (Set): {setpoint:.2f} cm")
-        except Exception as e:
-            self.lbl_status.setText(f"Estado: Error enviando Setpoint ({e})")
+            self.lbl_status.setStyleSheet(f"color: {COLOR_INFO}; {self.data_font_style}")  # Azul para acción completada
+        except Exception:
+            self.lbl_status.setText("ERROR al enviar SP.")
+            self.lbl_status.setStyleSheet(f"color: {COLOR_ERROR}; {self.data_font_style}")  # Rojo Pastel para error
 
     def send_pid(self):
+        COLOR_WARNING = "#F39C12"
+        COLOR_INFO = "#3498DB"
+        COLOR_ERROR = "#E74C3C"
+
         if not (self.ser and self.ser.is_open):
-            self.lbl_status.setText("Estado: No conectado")
+            self.lbl_status.setText("DESCONECTADO. PID no enviado.")
+            self.lbl_status.setStyleSheet(f"color: {COLOR_WARNING}; {self.data_font_style}")  # Naranja para advertencia
             return
 
         kp = self.spn_kp.value()
@@ -344,11 +382,12 @@ class MainWindow(QMainWindow):
         try:
             self.ser.write(msg.encode("ascii"))
             self.lbl_status.setText(
-                f"Estado: PID actualizado -> Kp={kp:.3f}, Ki={ki:.4f}, Kd={kd:.3f}"
+                f"PID enviado -> Kp={kp:.3f}, Ki={ki:.4f}, Kd={kd:.3f}"
             )
-        except Exception as e:
-            self.lbl_status.setText(f"Estado: Error enviando PID ({e})")
-
+            self.lbl_status.setStyleSheet(f"color: {COLOR_INFO}; {self.data_font_style}")  # Azul para acción completada
+        except Exception:
+            self.lbl_status.setText("ERROR al enviar PID.")
+            self.lbl_status.setStyleSheet(f"color: {COLOR_ERROR}; {self.data_font_style}")  # Rojo Pastel para error
 
     def update_from_serial(self):
         if not (self.ser and self.ser.is_open):
@@ -368,6 +407,10 @@ class MainWindow(QMainWindow):
             return
 
     def process_frame(self, frame: str):
+        COLOR_SUCCESS = "#2ECC71"  # Verde Pastel
+        COLOR_WARNING = "#F39C12"  # Naranja
+        COLOR_ERROR = "#E74C3C"  # Rojo Pastel
+
         parts = frame.split(",")
         if len(parts) < 5:
             return
@@ -394,30 +437,16 @@ class MainWindow(QMainWindow):
 
         self.lbl_error.setText(f"Error (E): {error_val:6.2f} cm")
 
-        error_color = "#3CB371"  # Verde Mar (Mínimo error)
+        # Lógica de color de error basada en el nuevo esquema
+        error_color = COLOR_SUCCESS  # Verde para error pequeño
         if abs(error_val) > 0.2:
-            error_color = "#FFA500"  # Naranja (Error medio)
+            error_color = COLOR_WARNING  # Naranja para error moderado
         if abs(error_val) > 5.0:
-            error_color = "#FF6347"  # Rojo Coral (Error grande)
-        self.lbl_error.setStyleSheet(f"font-size: 14pt; font-weight: 600; color: {error_color};")
+            error_color = COLOR_ERROR  # Rojo Pastel para error grande
 
-        # Estado de centrado (AJUSTE DE RANGOS)
-        Rint = 10  # Aumentado de 8 a 10 para menos sensibilidad
-        Rext = 50  # Aumentado de 40 a 50 para menos sensibilidad
+        self.lbl_error.setStyleSheet(
+            f"font-family: 'Consolas', 'Courier New', monospace; font-size: 14pt; font-weight: 600; color: {error_color};")
 
-        if abs(dist_cm) < Rint:
-            txt = "Estado: CENTRADA (Dentro del objetivo)"
-            color = "#3CB371"  # Verde Mar
-        elif abs(dist_cm) < Rext:
-            txt = "Estado: Controlando"
-            color = "#FFA500"  # Naranja
-        else:
-            txt = "Estado: FUERA DE RANGO"
-            color = "#FF6347"  # Rojo Coral
-        self.lbl_in_range.setText(txt)
-        self.lbl_in_range.setStyleSheet(f"font-size: 11pt; font-weight: 600; color: {color};")
-
-        # Actualizar curvas
         self.curve_pos.setData(list(self.time_data), list(self.dist_data))
         self.curve_ref.setData(list(self.time_data), list(self.ref_data))
 
